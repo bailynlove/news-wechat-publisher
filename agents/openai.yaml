@@ -1,0 +1,6 @@
+interface:
+  display_name: "News WeChat Publisher"
+  short_description: "Draft and publish AI trend digests to WeChat"
+  default_prompt: "Use $news-wechat-publisher to draft today's AI trend digest and publish it to the WeChat draft box."
+policy:
+  allow_implicit_invocation: true

@@ -1,148 +1,241 @@
 #!/usr/bin/env bash
-# wechat-publisher: 发布 Markdown 到微信公众号草稿箱
-# Usage: ./publish.sh <markdown-file> [theme] [highlight]
+# Publish a Markdown trend article to the WeChat Official Account draft box.
 
-set -e
+set -euo pipefail
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 默认配置
 DEFAULT_THEME="lapis"
 DEFAULT_HIGHLIGHT="solarized-light"
-TOOLS_MD="$HOME/.openclaw/workspace/TOOLS.md"
+DEFAULT_COVER="$REPO_ROOT/assets/default-cover.jpg"
 
-# 检查 wenyan-cli 是否安装
-check_wenyan() {
-    if ! command -v wenyan &> /dev/null; then
-        echo -e "${RED}❌ wenyan-cli 未安装！${NC}"
-        echo -e "${YELLOW}正在安装 wenyan-cli...${NC}"
-        npm install -g @wenyan-md/cli
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ wenyan-cli 安装成功！${NC}"
-        else
-            echo -e "${RED}❌ 安装失败！请手动运行: npm install -g @wenyan-md/cli${NC}"
-            exit 1
-        fi
-    fi
+THEME="$DEFAULT_THEME"
+HIGHLIGHT="$DEFAULT_HIGHLIGHT"
+COVER="$DEFAULT_COVER"
+DRY_RUN=0
+ARTICLE=""
+TEMP_FILE=""
+
+red() { printf '\033[0;31m%s\033[0m\n' "$*"; }
+green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[1;33m%s\033[0m\n' "$*"; }
+
+cleanup() {
+  if [ -n "$TEMP_FILE" ] && [ -f "$TEMP_FILE" ]; then
+    rm -f "$TEMP_FILE"
+  fi
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash scripts/publish.sh article.md [--theme lapis] [--highlight solarized-light] [--cover path-or-url] [--dry-run]
+
+Examples:
+  bash scripts/publish.sh drafts/2026-06-30-ai-trends.md
+  bash scripts/publish.sh drafts/2026-06-30-ai-trends.md --theme lapis --highlight github
+  bash scripts/publish.sh drafts/2026-06-30-ai-trends.md --dry-run
+EOF
 }
 
-# 从 TOOLS.md 读取环境变量
-load_credentials() {
-    if [ -z "$WECHAT_APP_ID" ] || [ -z "$WECHAT_APP_SECRET" ]; then
-        if [ -f "$TOOLS_MD" ]; then
-            echo -e "${YELLOW}📖 从 TOOLS.md 读取凭证...${NC}"
-            export WECHAT_APP_ID=$(grep "export WECHAT_APP_ID=" "$TOOLS_MD" | head -1 | sed 's/.*export WECHAT_APP_ID=//' | tr -d ' ')
-            export WECHAT_APP_SECRET=$(grep "export WECHAT_APP_SECRET=" "$TOOLS_MD" | head -1 | sed 's/.*export WECHAT_APP_SECRET=//' | tr -d ' ')
-        fi
-    fi
-}
-
-# 检查环境变量
-check_env() {
-    load_credentials
-    
-    if [ -z "$WECHAT_APP_ID" ] || [ -z "$WECHAT_APP_SECRET" ]; then
-        echo -e "${RED}❌ 环境变量未设置！${NC}"
-        echo -e "${YELLOW}请在 TOOLS.md 中添加微信公众号凭证：${NC}"
-        echo ""
-        echo "  ## 🔐 WeChat Official Account (微信公众号)"
-        echo "  "
-        echo "  export WECHAT_APP_ID=your_app_id"
-        echo "  export WECHAT_APP_SECRET=your_app_secret"
-        echo ""
-        echo -e "${YELLOW}或者手动设置环境变量：${NC}"
-        echo "  export WECHAT_APP_ID=your_app_id"
-        echo "  export WECHAT_APP_SECRET=your_app_secret"
-        echo ""
-        echo -e "${YELLOW}或者运行：${NC}"
-        echo "  source ./scripts/setup.sh"
-        exit 1
-    fi
-}
-
-# 检查文件是否存在
-check_file() {
-    local file="$1"
-    if [ ! -f "$file" ]; then
-        echo -e "${RED}❌ 文件不存在: $file${NC}"
-        exit 1
-    fi
-}
-
-# 发布函数
-publish() {
-    local file="$1"
-    local theme="${2:-$DEFAULT_THEME}"
-    local highlight="${3:-$DEFAULT_HIGHLIGHT}"
-    
-    echo -e "${GREEN}📝 准备发布文章...${NC}"
-    echo "  文件: $file"
-    echo "  主题: $theme"
-    echo "  代码高亮: $highlight"
-    echo ""
-    
-    # 执行发布
-    wenyan publish -f "$file" -t "$theme" -h "$highlight"
-    
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo -e "${GREEN}✅ 发布成功！${NC}"
-        echo -e "${YELLOW}📱 请前往微信公众号后台草稿箱查看：${NC}"
-        echo "  https://mp.weixin.qq.com/"
-    else
-        echo ""
-        echo -e "${RED}❌ 发布失败！${NC}"
-        echo -e "${YELLOW}💡 常见问题：${NC}"
-        echo "  1. IP 未在白名单 → 添加到公众号后台"
-        echo "  2. Frontmatter 缺失 → 文件顶部添加 title + cover"
-        echo "  3. API 凭证错误 → 检查 TOOLS.md 中的凭证"
-        echo "  4. 封面尺寸错误 → 需要 1080×864 像素"
-        exit 1
-    fi
-}
-
-# 显示帮助
-show_help() {
-    echo "Usage: $0 <markdown-file> [theme] [highlight]"
-    echo ""
-    echo "Examples:"
-    echo "  $0 article.md"
-    echo "  $0 article.md lapis"
-    echo "  $0 article.md lapis solarized-light"
-    echo ""
-    echo "Available themes:"
-    echo "  default, lapis, phycat, ..."
-    echo "  Run 'wenyan theme -l' to see all themes"
-    echo ""
-    echo "Available highlights:"
-    echo "  atom-one-dark, atom-one-light, dracula, github-dark, github,"
-    echo "  monokai, solarized-dark, solarized-light, xcode"
-}
-
-# 主函数
-main() {
-    # 检查参数
-    if [ $# -eq 0 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
-        show_help
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        usage
         exit 0
-    fi
-    
-    local file="$1"
-    local theme="$2"
-    local highlight="$3"
-    
-    # 执行检查
-    check_wenyan
-    check_env
-    check_file "$file"
-    
-    # 发布文章
-    publish "$file" "$theme" "$highlight"
+        ;;
+      --theme)
+        THEME="${2:-}"
+        shift 2
+        ;;
+      --highlight)
+        HIGHLIGHT="${2:-}"
+        shift 2
+        ;;
+      --cover)
+        COVER="${2:-}"
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      -*)
+        red "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+      *)
+        if [ -n "$ARTICLE" ]; then
+          red "Only one article path is supported."
+          exit 1
+        fi
+        ARTICLE="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$ARTICLE" ]; then
+    usage
+    exit 1
+  fi
 }
 
-# 运行
+read_var_from_file() {
+  local file="$1"
+  local key="$2"
+
+  [ -f "$file" ] || return 0
+
+  sed -nE "s/^[[:space:]]*(export[[:space:]]+)?${key}=(['\"]?)([^'\"]*)\\2[[:space:]]*$/\\3/p" "$file" | head -1
+}
+
+load_credentials() {
+  local files=(
+    "$REPO_ROOT/.env"
+    "$HOME/.wechat-publisher.env"
+  )
+
+  for file in "${files[@]}"; do
+    if [ -z "${WECHAT_APP_ID:-}" ]; then
+      WECHAT_APP_ID="$(read_var_from_file "$file" WECHAT_APP_ID || true)"
+      export WECHAT_APP_ID
+    fi
+    if [ -z "${WECHAT_APP_SECRET:-}" ]; then
+      WECHAT_APP_SECRET="$(read_var_from_file "$file" WECHAT_APP_SECRET || true)"
+      export WECHAT_APP_SECRET
+    fi
+  done
+}
+
+require_tools() {
+  if ! command -v wenyan >/dev/null 2>&1; then
+    red "wenyan-cli is not installed."
+    yellow "Install it with: npm install -g @wenyan-md/cli"
+    exit 1
+  fi
+}
+
+require_credentials() {
+  load_credentials
+
+  if [ -z "${WECHAT_APP_ID:-}" ] || [ -z "${WECHAT_APP_SECRET:-}" ]; then
+    red "Missing WeChat credentials."
+    cat <<'EOF'
+Set these values in the environment, .env, or ~/.wechat-publisher.env:
+
+  WECHAT_APP_ID=your_app_id
+  WECHAT_APP_SECRET=your_app_secret
+
+Also make sure the current public IP is whitelisted in the WeChat Official Account backend.
+EOF
+    exit 1
+  fi
+}
+
+require_article() {
+  if [ ! -f "$ARTICLE" ]; then
+    red "Article file not found: $ARTICLE"
+    exit 1
+  fi
+
+  if grep -q '{{[^}]*}}' "$ARTICLE"; then
+    red "Article still contains template placeholders like {{...}}."
+    exit 1
+  fi
+}
+
+first_heading_title() {
+  sed -nE 's/^#[[:space:]]+(.+)$/\1/p' "$ARTICLE" | head -1
+}
+
+frontmatter_title() {
+  awk '
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---" { exit }
+    in_fm && /^title:[[:space:]]*/ {
+      sub(/^title:[[:space:]]*/, "")
+      gsub(/^["'\'']|["'\'']$/, "")
+      print
+      exit
+    }
+  ' "$ARTICLE"
+}
+
+has_frontmatter() {
+  [ "$(sed -n '1p' "$ARTICLE")" = "---" ]
+}
+
+frontmatter_has_cover() {
+  awk '
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---" { exit }
+    in_fm && /^cover:[[:space:]]*/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$ARTICLE"
+}
+
+prepare_article() {
+  if has_frontmatter && frontmatter_has_cover; then
+    printf '%s\n' "$ARTICLE"
+    return
+  fi
+
+  local title
+  title="$(frontmatter_title)"
+  if [ -z "$title" ]; then
+    title="$(first_heading_title)"
+  fi
+  if [ -z "$title" ]; then
+    title="AI 趋势情报"
+  fi
+
+  TEMP_FILE="$(mktemp "${TMPDIR:-/tmp}/wechat-draft.XXXXXX")"
+
+  if has_frontmatter; then
+    awk -v cover="$COVER" '
+      NR == 1 && $0 == "---" { print; in_fm = 1; next }
+      in_fm && $0 == "---" && !inserted { print "cover: " cover; inserted = 1; print; in_fm = 0; next }
+      { print }
+    ' "$ARTICLE" > "$TEMP_FILE"
+  else
+    {
+      printf '%s\n' '---'
+      printf 'title: %s\n' "$title"
+      printf 'cover: %s\n' "$COVER"
+      printf '%s\n\n' '---'
+      cat "$ARTICLE"
+    } > "$TEMP_FILE"
+  fi
+
+  printf '%s\n' "$TEMP_FILE"
+}
+
+main() {
+  parse_args "$@"
+  require_article
+  require_tools
+  require_credentials
+
+  local publish_file
+  publish_file="$(prepare_article)"
+
+  green "Article is ready for WeChat draft publishing."
+  printf '  file: %s\n' "$publish_file"
+  printf '  theme: %s\n' "$THEME"
+  printf '  highlight: %s\n' "$HIGHLIGHT"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    yellow "Dry run complete. Nothing was published."
+    exit 0
+  fi
+
+  wenyan publish -f "$publish_file" -t "$THEME" -h "$HIGHLIGHT"
+  green "Published to WeChat draft box. Review it at https://mp.weixin.qq.com/"
+}
+
 main "$@"
